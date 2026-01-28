@@ -129,8 +129,8 @@ start_postgres_container() {
     -e POSTGRES_USER=airflow \
     -e POSTGRES_PASSWORD=airflow \
     -e POSTGRES_DB=airflow \
-    -c max_connections=300 \
-    docker.io/library/postgres:13.4-buster
+    docker.io/library/postgres:13.4-buster \
+    -c max_connections=300
 }
 
 wait_pg_ready() {
@@ -255,15 +255,20 @@ runuser -u "$AIRFLOW_USER" -- bash -lc "
     airflow version >/dev/null
   fi
 
-  airflow config set core executor CeleryExecutor
-  airflow config set database sql_alchemy_conn 'postgresql+psycopg2://airflow:airflow@127.0.0.1:5432/airflow'
-  airflow config set celery broker_url 'redis://127.0.0.1:6379/0'
-  airflow config set celery result_backend 'db+postgresql://airflow:airflow@127.0.0.1:5432/airflow'
-  airflow config set core dags_folder '$AIRFLOW_HOME/dags'
-
+  #airflow config set core executor CeleryExecutor
+  #airflow config set database sql_alchemy_conn 'postgresql+psycopg2://airflow:airflow@127.0.0.1:5432/airflow'
+  #airflow config set celery broker_url 'redis://127.0.0.1:6379/0'
+  #airflow config set celery result_backend 'db+postgresql://airflow:airflow@127.0.0.1:5432/airflow'
+  #airflow config set core dags_folder '$AIRFLOW_HOME/dags'
   # 避免 FAB auth manager 缺 provider 導致 webserver 起不來
-  airflow config unset core auth_manager || true
+  #airflow config unset core auth_manager || true
 "
+sed -i 's|^#\?executor = .*|executor = CeleryExecutor|' "$CFG_FILE"
+sed -i 's|^#\?sql_alchemy_conn = .*|sql_alchemy_conn = postgresql+psycopg2://airflow:airflow@127.0.0.1:5432/airflow|' "$CFG_FILE"
+sed -i 's|^#\?broker_url = .*|broker_url = redis://127.0.0.1:6379/0|' "$CFG_FILE"
+sed -i 's|^#\?result_backend = .*|result_backend = db+postgresql://airflow:airflow@127.0.0.1:5432/airflow|' "$CFG_FILE"
+sed -i "s|^#\?dags_folder = .*|dags_folder = $AIRFLOW_HOME/dags|" "$CFG_FILE"
+sed -i '/^#\?auth_manager =/d' "$CFG_FILE"
 chown "$AIRFLOW_USER:$AIRFLOW_USER" "$CFG_FILE"
 
 # --------------------------
