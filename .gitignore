@@ -28,3 +28,4 @@ airflow.cfg
 
 # local shell history
 .bash_history
+postgres_data/
