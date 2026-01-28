@@ -1,0 +1,268 @@
+#!/bin/bash
+set -euo pipefail
+
+# Airflow Ops Script (systemd Airflow + podman Postgres/Redis)
+# Usage:
+#   airflow-ops {start|stop|restart|status|logs} {all|airflow|infra|db|redis|web|scheduler|triggerer|flower|worker|workers}
+# Notes:
+# - Airflow components are systemd units
+# - Postgres/Redis are podman containers
+
+ACTION="${1:-}"
+TARGET="${2:-}"
+
+# -------- Config --------
+# podman container names (rootful podman)
+PG_CTN="airflow-postgres"
+RD_CTN="airflow-redis"
+
+# systemd units
+AF_WEBSERVER="airflow-webserver"
+AF_SCHEDULER="airflow-scheduler"
+AF_TRIGGERER="airflow-trigger"
+AF_FLOWER="airflow-flower"
+
+# workers: manage all instances (airflow-worker@1, airflow-worker@2 ...)
+AF_WORKER_TEMPLATE="airflow-worker@.service"
+AF_WORKER_GLOB="airflow-worker@*.service"
+
+ALL_AIRFLOW_UNITS=("$AF_WEBSERVER" "$AF_SCHEDULER" "$AF_TRIGGERER" "$AF_FLOWER")
+# Workers are dynamic; we handle separately.
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") {start|stop|restart|status|logs} {TARGET}
+
+Targets:
+  all        : Entire stack (infra + airflow + workers)
+  airflow    : Airflow components (web/scheduler/triggerer/flower + workers)
+  infra      : Postgres + Redis (podman containers)
+  db         : Postgres (podman)
+  redis      : Redis (podman)
+  web        : Airflow webserver (systemd)
+  scheduler  : Airflow scheduler (systemd)
+  triggerer  : Airflow triggerer (systemd)  [unit: airflow-trigger]
+  flower     : Airflow flower (systemd)
+  worker     : All worker instances (systemd) (airflow-worker@N)
+EOF
+  exit 1
+}
+
+[[ -z "$ACTION" || -z "$TARGET" ]] && usage
+
+need_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    echo "This script needs sudo/root."
+    exit 1
+  fi
+}
+
+# Return list of worker instance units currently installed/enabled
+list_worker_units() {
+  # pick active/enabled instances if exist; fallback to glob on disk
+  systemctl list-unit-files "$AF_WORKER_GLOB" --no-legend 2>/dev/null | awk '{print $1}' | sort -u
+}
+
+# -------- Actions: infra (podman) --------
+infra_start() {
+  sudo podman start "$PG_CTN" >/dev/null 2>&1 || true
+  sudo podman start "$RD_CTN" >/dev/null 2>&1 || true
+}
+infra_stop() {
+  sudo podman stop "$PG_CTN" >/dev/null 2>&1 || true
+  sudo podman stop "$RD_CTN" >/dev/null 2>&1 || true
+}
+infra_restart() {
+  infra_stop
+  infra_start
+}
+infra_status() {
+  echo "== podman containers =="
+  sudo podman ps --filter "name=$PG_CTN" --filter "name=$RD_CTN" || true
+}
+infra_logs() {
+  echo "== podman logs ($PG_CTN) =="
+  sudo podman logs -f --tail 200 "$PG_CTN"
+}
+
+redis_logs() {
+  echo "== podman logs ($RD_CTN) =="
+  sudo podman logs -f --tail 200 "$RD_CTN"
+}
+
+# -------- Actions: airflow (systemd) --------
+airflow_units_status() {
+  sudo systemctl status "${ALL_AIRFLOW_UNITS[@]}" --no-pager || true
+  local workers
+  workers="$(list_worker_units || true)"
+  if [[ -n "$workers" ]]; then
+    sudo systemctl status $workers --no-pager || true
+  else
+    echo "No airflow-worker@N instances found."
+  fi
+}
+
+airflow_units_logs() {
+  # journalctl for airflow units + worker instances
+  local units=("${ALL_AIRFLOW_UNITS[@]}")
+  local workers
+  workers="$(list_worker_units || true)"
+  if [[ -n "$workers" ]]; then
+    # shellcheck disable=SC2206
+    units+=($workers)
+  fi
+  echo "Tailing journal logs for: ${units[*]} (Ctrl+C to exit)..."
+  local args=()
+  for u in "${units[@]}"; do args+=("-u" "$u"); done
+  sudo journalctl "${args[@]}" -f
+}
+
+workers_ctl() {
+  local op="$1"
+  local workers
+  workers="$(list_worker_units || true)"
+  if [[ -z "$workers" ]]; then
+    echo "No airflow-worker@N instances found."
+    return 0
+  fi
+  sudo systemctl "$op" $workers
+}
+
+# -------- Dispatch --------
+case "$TARGET" in
+  all)
+    case "$ACTION" in
+      start)
+        infra_start
+        sudo systemctl start "${ALL_AIRFLOW_UNITS[@]}"
+        workers_ctl start
+        ;;
+      stop)
+        workers_ctl stop
+        sudo systemctl stop "${ALL_AIRFLOW_UNITS[@]}"
+        infra_stop
+        ;;
+      restart)
+        workers_ctl stop || true
+        sudo systemctl restart "${ALL_AIRFLOW_UNITS[@]}"
+        workers_ctl restart || true
+        ;;
+      status)
+        infra_status
+        airflow_units_status
+        ;;
+      logs)
+        # show airflow journals; infra logs you can call separately with target db/redis
+        airflow_units_logs
+        ;;
+      *) usage ;;
+    esac
+    ;;
+
+  airflow)
+    case "$ACTION" in
+      start|stop|restart)
+        sudo systemctl "$ACTION" "${ALL_AIRFLOW_UNITS[@]}"
+        workers_ctl "$ACTION"
+        ;;
+      status) airflow_units_status ;;
+      logs) airflow_units_logs ;;
+      *) usage ;;
+    esac
+    ;;
+
+  infra)
+    case "$ACTION" in
+      start) infra_start ;;
+      stop) infra_stop ;;
+      restart) infra_restart ;;
+      status) infra_status ;;
+      logs)
+        echo "Use: $0 logs db  OR  $0 logs redis"
+        ;;
+      *) usage ;;
+    esac
+    ;;
+
+  db|postgres|postgresql)
+    case "$ACTION" in
+      start) sudo podman start "$PG_CTN" ;;
+      stop) sudo podman stop "$PG_CTN" ;;
+      restart) sudo podman restart "$PG_CTN" ;;
+      status) sudo podman ps --filter "name=$PG_CTN" ;;
+      logs) sudo podman logs -f --tail 200 "$PG_CTN" ;;
+      *) usage ;;
+    esac
+    ;;
+
+  redis)
+    case "$ACTION" in
+      start) sudo podman start "$RD_CTN" ;;
+      stop) sudo podman stop "$RD_CTN" ;;
+      restart) sudo podman restart "$RD_CTN" ;;
+      status) sudo podman ps --filter "name=$RD_CTN" ;;
+      logs) sudo podman logs -f --tail 200 "$RD_CTN" ;;
+      *) usage ;;
+    esac
+    ;;
+
+  web|webserver)
+    case "$ACTION" in
+      start|stop|restart) sudo systemctl "$ACTION" "$AF_WEBSERVER" ;;
+      status) sudo systemctl status "$AF_WEBSERVER" --no-pager ;;
+      logs) sudo journalctl -u "$AF_WEBSERVER" -f ;;
+      *) usage ;;
+    esac
+    ;;
+
+  scheduler)
+    case "$ACTION" in
+      start|stop|restart) sudo systemctl "$ACTION" "$AF_SCHEDULER" ;;
+      status) sudo systemctl status "$AF_SCHEDULER" --no-pager ;;
+      logs) sudo journalctl -u "$AF_SCHEDULER" -f ;;
+      *) usage ;;
+    esac
+    ;;
+
+  triggerer)
+    case "$ACTION" in
+      start|stop|restart) sudo systemctl "$ACTION" "$AF_TRIGGERER" ;;
+      status) sudo systemctl status "$AF_TRIGGERER" --no-pager ;;
+      logs) sudo journalctl -u "$AF_TRIGGERER" -f ;;
+      *) usage ;;
+    esac
+    ;;
+
+  flower)
+    case "$ACTION" in
+      start|stop|restart) sudo systemctl "$ACTION" "$AF_FLOWER" ;;
+      status) sudo systemctl status "$AF_FLOWER" --no-pager ;;
+      logs) sudo journalctl -u "$AF_FLOWER" -f ;;
+      *) usage ;;
+    esac
+    ;;
+
+  worker|workers)
+    case "$ACTION" in
+      start|stop|restart) workers_ctl "$ACTION" ;;
+      status)
+        w="$(list_worker_units || true)"
+        [[ -n "$w" ]] && sudo systemctl status $w --no-pager || echo "No airflow-worker@N instances found."
+        ;;
+      logs)
+        w="$(list_worker_units || true)"
+        if [[ -n "$w" ]]; then
+          args=()
+          for u in $w; do args+=("-u" "$u"); done
+          sudo journalctl "${args[@]}" -f
+        else
+          echo "No airflow-worker@N instances found."
+        fi
+        ;;
+      *) usage ;;
+    esac
+    ;;
+
+  *) echo "Error: Unknown target \"$TARGET\""; usage ;;
+esac
+
