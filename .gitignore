@@ -24,3 +24,4 @@ airflow.cfg
 
 # --- 系統檔案 ---
 .DS_Store
+.bash_history
