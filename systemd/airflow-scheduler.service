@@ -1,6 +1,6 @@
 [Unit]
 Description=Airflow Scheduler
-After=network.target airflow-postgres.service
+After=network.target 
 Wants=network.target
 
 [Service]
