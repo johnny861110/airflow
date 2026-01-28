@@ -1,0 +1,26 @@
+# --- 忽略快取與工具暫存 (最佔空間的部分) ---
+.cache/
+.npm/
+.gemini/
+.vscode-ripgrep/
+.viminfo
+.local/share/containers/ 
+
+# --- 忽略 Airflow 運行時產生的檔案 ---
+airflow/airflow.db
+logs/
+*.pid
+*.log
+*.pyc
+__pycache__/
+
+# --- 忽略環境與套件 ---
+venv/
+node_modules/
+
+# --- 忽略敏感設定 ---
+airflow.cfg
+.gitconfig
+
+# --- 系統檔案 ---
+.DS_Store
