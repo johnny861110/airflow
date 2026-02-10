@@ -60,7 +60,8 @@ need_root() {
 # Return list of worker instance units currently installed/enabled
 list_worker_units() {
   # pick active/enabled instances if exist; fallback to glob on disk
-  systemctl list-unit-files "$AF_WORKER_GLOB" --no-legend 2>/dev/null | awk '{print $1}' | sort -u
+  # Exclude the template itself (airflow-worker@.service) from the list
+  sudo systemctl list-units --all "$AF_WORKER_GLOB" --no-legend | awk '{print $1}' | grep -E '^airflow-worker@.+\.service$' | sort -u
 }
 
 # -------- Actions: infra (podman) --------
