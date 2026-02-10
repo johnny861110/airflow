@@ -1,0 +1,41 @@
+[Unit]
+Description=Airflow Celery Worker %i
+After=network.target airflow-scheduler.service
+Wants=network.target
+
+[Service]
+User=airflow
+Group=airflow
+Type=simple
+
+Environment=AIRFLOW_HOME=/opt/airflow
+Environment=PATH=/opt/airflow/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+WorkingDirectory=/opt/airflow
+
+# 建立 /run/airflow 給 pid 用
+RuntimeDirectory=airflow
+RuntimeDirectoryMode=0755
+
+# 每個 worker instance 都有自己的 pid + log server port（用 EnvironmentFile 或直接寫死）
+EnvironmentFile=/opt/airflow/config/worker-%i.env
+
+
+
+ExecStart=/opt/airflow/venv/bin/airflow celery worker \
+  -H %H@%i \
+  --concurrency 4 \
+  --pid /run/airflow/airflow-worker-%i.pid \
+  --log-file /opt/airflow/logs/celery-worker-%i.log
+
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=120
+KillMode=mixed
+
+# 防止 worker crash loop
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,25 @@
+[Unit]
+Description=Airflow Scheduler
+After=network.target 
+Wants=network.target
+
+[Service]
+User=airflow
+Group=airflow
+Type=simple
+
+Environment=AIRFLOW_HOME=/opt/airflow
+Environment=PATH=/opt/airflow/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+WorkingDirectory=/opt/airflow
+
+ExecStart=/opt/airflow/venv/bin/airflow scheduler
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+
